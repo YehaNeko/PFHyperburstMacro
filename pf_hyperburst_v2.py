@@ -334,8 +334,8 @@ def main() -> None:
         do_clicking = manager.Event()
 
         # Macros
-        # rpm, shots = get_initial_weapon()
-        rpm, shots = 650, 2
+        # rpm, shots = 650, 2
+        rpm, shots = get_initial_weapon()
         primary_macro = PrimaryHyperburstMacro(rpm, shots, virtual_event)
         active_macro = primary_macro
         namespace.active_macro = active_macro
