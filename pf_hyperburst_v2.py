@@ -50,14 +50,23 @@ class PrimaryHyperburstMacro(BaseHyperburstMacro):
         self.controller = mouse.Controller()
         self.button: Button = Button.left
 
-        self.rpm: float = rpm
+        self._rpm: float = rpm
         self.shots: int = shots
 
         # Fine-tuning
-        self.sleep_after_burst = 0.002
-        self.add_delay_per_shot = 0.002
+        self.sleep_after_burst = 0.001
+        self.add_delay_per_shot = 0.001
 
         self.delay_per_shot: float = 0.000
+        self.calc_delay()
+
+    @property
+    def rpm(self) -> float:
+        return self._rpm
+
+    @rpm.setter
+    def rpm(self, value: float) -> None:
+        self._rpm = value
         self.calc_delay()
 
     @staticmethod
@@ -82,7 +91,6 @@ class PrimaryHyperburstMacro(BaseHyperburstMacro):
     def calc_delay(self) -> None:
         self.delay_per_shot = 1 / (self.rpm / 60)
         self.delay_per_shot += self.add_delay_per_shot
-        print(self.delay_per_shot)  # todo: remove
 
     def press(self):
         self.virtual_event.set()
@@ -137,9 +145,7 @@ class RobloxWindowFocusedChecker(multiprocessing.Process):
         _is_already_set: bool = False
 
         # Interval in seconds
-        check_interval: float = 0.05
-
-        _last_win_title: str = ''
+        check_interval: float = 0.05  # 50ms
 
         while self.program_alive.is_set():
             current_win_title = self.get_foreground_window_title()
@@ -150,11 +156,11 @@ class RobloxWindowFocusedChecker(multiprocessing.Process):
                     self.is_roblox.set()
                     _is_already_set = True
                     print('Roblox focused.')
-            else:
-                if _is_already_set:
-                    self.is_roblox.clear()
-                    _is_already_set = False
-                    print('Roblox not focused.')
+
+            elif _is_already_set:
+                self.is_roblox.clear()
+                _is_already_set = False
+                print('Roblox not focused.')
 
             # Limit frequency
             time.sleep(check_interval)
@@ -286,7 +292,6 @@ def proc_input(cmd: str) -> None:
     try:
         if cmd == 'rpm':
             active_macro.rpm = float(args[0])
-            active_macro.calc_delay()
             print('RPM set!')
 
         elif cmd == 'shots':
@@ -296,7 +301,6 @@ def proc_input(cmd: str) -> None:
         elif cmd == 'set':
             active_macro.rpm = float(args[0])
             active_macro.shots = int(args[1])
-            active_macro.calc_delay()
             print('RPM and Shots set!')
 
     except (ValueError, IndexError):
