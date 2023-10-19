@@ -2,6 +2,8 @@
 # pylint: disable=invalid-name, trailing-whitespace
 from __future__ import annotations
 
+import os
+import sys
 import time
 import queue
 import threading
@@ -14,6 +16,7 @@ from ctypes import windll, create_unicode_buffer
 from pynput import mouse
 from pynput.mouse import Button
 
+from config import TOGGLE_KEYBIND, WEAPON_ARGS
 from base.macro import (
     RawMouseButtonEvent,
     MouseButtonEvent,
@@ -97,21 +100,33 @@ class RobloxWindowFocusedChecker(multiprocessing.Process):
 
 
 class PrimaryHyperburstMacro(BaseHyperburstMacro):
-    def __init__(self, rpm: float, shots: int, vir_event: Event):
+    def __init__(self, args: tuple[float, int, float],  vir_event: Event):
+        from config import (
+            ADD_DELAY_PER_SHOT,
+            SLEEP_AFTER_BURST,
+            THE_LITO_FACTOR
+        )
+
         self.virtual_event: Event = vir_event
         self.controller = mouse.Controller()
         self.button: Button = Button.left
+        rpm, shots, firecap = args
 
-        self._rpm: float = rpm
-        self.shots: int = shots
         self._firecap: float = 0.0
+        self._rpm: float = rpm
+
+        # Defaults
+        self.the_lito_factor = THE_LITO_FACTOR
 
         # Fine-tuning
-        self.sleep_after_burst = 0.001
-        self.add_delay_per_shot = 0.001
+        self.default_sleep_after_burst = SLEEP_AFTER_BURST
+        self.add_delay_per_shot = ADD_DELAY_PER_SHOT
 
+        # Determined automatically
+        self.sleep_after_burst = self.default_sleep_after_burst
         self.delay_per_shot: float = 0.000
-        self.calc_delay()
+        self.shots: int = shots
+        self.rpm = self._rpm
 
     @property
     def rpm(self) -> float:
@@ -120,7 +135,10 @@ class PrimaryHyperburstMacro(BaseHyperburstMacro):
     @rpm.setter
     def rpm(self, value: float) -> None:
         self._rpm = value
-        self.calc_delay()
+
+        self.delay_per_shot = 1 / (self._rpm / 60)
+        self.delay_per_shot = round(self.delay_per_shot, 6)
+        self.delay_per_shot += self.add_delay_per_shot
 
     @property
     def firecap(self) -> float:
@@ -131,11 +149,12 @@ class PrimaryHyperburstMacro(BaseHyperburstMacro):
         self._firecap = value
 
         if not value == 0:
-            val = 60 / value - self.delay_per_shot * self.shots
+            val = 60 / value
             val = round(val, 6)
+            val += self.the_lito_factor
             self.sleep_after_burst = val
         else:
-            self.sleep_after_burst = 0.0
+            self.sleep_after_burst = self.default_sleep_after_burst
 
     @staticmethod
     def sleep(duration: float) -> None:
@@ -155,10 +174,6 @@ class PrimaryHyperburstMacro(BaseHyperburstMacro):
         while remaining_time > 0:
             elapsed_time = time.perf_counter() - start_time
             remaining_time = duration - elapsed_time
-
-    def calc_delay(self) -> None:
-        self.delay_per_shot = 1 / (self._rpm / 60)
-        self.delay_per_shot += self.add_delay_per_shot
 
     def press(self):
         self.virtual_event.set()
@@ -220,13 +235,18 @@ class ClickerThread(multiprocessing.Process):
             macro_step = self.do_macro_steps()
 
     @staticmethod
-    def macro_queue_worker(self, queue: multiprocessing.Queue):
-        while True:
+    def macro_queue_worker(self, queue: multiprocessing.Queue, alive):
+        while alive:
             attr, *args = queue.get()
             setattr(self.active_macro, attr, args[0])
 
     def run(self) -> None:
-        threading.Thread(target=self.macro_queue_worker, args=(self, self.macro_queue), daemon=True).start()
+        threading.Thread(
+            target=self.macro_queue_worker,
+            args=(self, self.macro_queue, self.program_alive),
+            daemon=True
+        ).start()
+
         self.macro_loop()
 
 
@@ -250,7 +270,7 @@ class StateControllerThread(threading.Thread):
             return True
 
         # This only occurs when the user presses the script toggle key
-        elif self.event.button.name == 'x1' and self.event.pressed:
+        elif self.event.button.name == TOGGLE_KEYBIND and self.event.pressed:
             # Flip boolean
             self.toggle = not self.toggle
             print('Script toggled to', self.toggle)
@@ -301,7 +321,7 @@ class StateControllerThread(threading.Thread):
 class MouseListenerThread(mouse.Listener):
     def __init__(self, *args, **kwargs):
         super().__init__(on_click=self.on_click, daemon=True, *args, **kwargs)
-        self.valid = ('left', 'x1')
+        self.valid = ('left', TOGGLE_KEYBIND)
 
         self.start()
 
@@ -314,6 +334,9 @@ class MouseListenerThread(mouse.Listener):
 def proc_input(cmd: str) -> None:
     cmd, *args = cmd.split(' ')
     cmd = cmd.lower()
+
+    if not cmd:
+        return
 
     try:
         if cmd == 'rpm':
@@ -340,24 +363,42 @@ def proc_input(cmd: str) -> None:
 
             print('RPM and Shots set!')
 
-        elif cmd in ('q', 'quit', 'exit', 'exit'):
+        elif cmd in ('q', 'quit', 'exit'):
             program_alive.clear()
-            exit()
 
-        elif cmd == 'reset':
+        elif cmd in ('r', 'reset'):
+            print('Reseting...\nNote that this currently does not get rid of old instances.')
             program_alive.clear()
-            main()
+            os.execl(sys.executable, sys.executable, *sys.argv)
+
+        else:
+            print('Unknown command.')
 
     except (ValueError, IndexError):
         print('Invalid input.')
 
 
-def get_initial_weapon() -> tuple[float, int]:
+def get_initial_weapon() -> tuple[float, int, float]:
+    opt = {
+        'firecap': 0
+    }
+
+    opt_values = list(opt.values())
+    opt_fmt = ' '.join(f'[{key}]' for key in opt.keys())
+
     while True:
         try:
-            rpm, shots, *_ = input('Input weapon stats (RPM, shots per burst): ').split(' ')
+            rpm, shots, *optionals = input(f'Input weapon stats:\n(RPM) (shots per burst) {opt_fmt}\n').split(' ')
             rpm, shots = float(rpm), int(shots)
-            return rpm, shots
+
+            # Optionals
+            if optionals:
+                given = len(optionals)
+
+                for i in range(given):
+                    opt_values[i] = optionals[i]
+
+            return rpm, shots, *opt_values
         except Exception:  # noqa
             print('\nInvalid input. Try again.')
 
@@ -379,9 +420,8 @@ def main() -> None:
         do_clicking = manager.Event()
 
         # Macros
-        rpm, shots = 1000, 1
-        # rpm, shots = get_initial_weapon()
-        primary_macro = PrimaryHyperburstMacro(rpm, shots, virtual_event)
+        macro_args = WEAPON_ARGS or get_initial_weapon()
+        primary_macro = PrimaryHyperburstMacro(macro_args, virtual_event)
         active_macro = primary_macro
 
         # Start event processing threads
@@ -395,13 +435,19 @@ def main() -> None:
         window_checker_thread = RobloxWindowFocusedChecker(is_rblx_focused, program_alive)
         window_checker_thread.start()
 
+        print('Ready!')
+
         # Block till done
         try:
             while program_alive.is_set():
                 proc_input(input())
+            raise KeyboardInterrupt
         except KeyboardInterrupt:
             print('Exiting...')
             program_alive.clear()
+
+            clicker_thread.kill()
+            window_checker_thread.kill()
             exit()
 
 

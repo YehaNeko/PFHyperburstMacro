@@ -22,9 +22,6 @@ class BaseMacro(Protocol):
 class BaseHyperburstMacro(BaseMacro, Protocol):
     """Base hyperburst macro."""
 
-    def calc_delay(self) -> None:
-        ...
-
     def press(self) -> None:
         ...
 
