@@ -24,7 +24,6 @@ from base.macro import (
     BaseHyperburstMacro
 )
 
-
 if TYPE_CHECKING:
     from multiprocessing.synchronize import Event
     from multiprocessing.managers import SyncManager
@@ -37,7 +36,6 @@ __copyright__ = 'my nuts'
 # Pre-define thread-safe objects
 # These are fully initialized in `main()`
 do_clicking: Event
-virtual_event: Event
 program_alive: Event
 is_rblx_focused: Event
 mouse_event_queue: queue.Queue
@@ -100,20 +98,20 @@ class RobloxWindowFocusedChecker(multiprocessing.Process):
 
 
 class PrimaryHyperburstMacro(BaseHyperburstMacro):
-    def __init__(self, args: tuple[float, int, float],  vir_event: Event):
+    def __init__(self, args: tuple[float, int, float]):
         from config import (
             ADD_DELAY_PER_SHOT,
             SLEEP_AFTER_BURST,
             THE_LITO_FACTOR
         )
 
-        self.virtual_event: Event = vir_event
         self.controller = mouse.Controller()
         self.button: Button = Button.left
         rpm, shots, firecap = args
 
         self._firecap: float = 0.0
         self._rpm: float = rpm
+        self.shots: int = shots
 
         # Defaults
         self.the_lito_factor = THE_LITO_FACTOR
@@ -125,7 +123,6 @@ class PrimaryHyperburstMacro(BaseHyperburstMacro):
         # Determined automatically
         self.sleep_after_burst = self.default_sleep_after_burst
         self.delay_per_shot: float = 0.000
-        self.shots: int = shots
         self.rpm = self._rpm
 
     @property
@@ -145,7 +142,7 @@ class PrimaryHyperburstMacro(BaseHyperburstMacro):
         return self._firecap
 
     @firecap.setter
-    def firecap(self, value: float):
+    def firecap(self, value: float) -> None:
         self._firecap = value
 
         if not value == 0:
@@ -164,11 +161,35 @@ class PrimaryHyperburstMacro(BaseHyperburstMacro):
 
         # Low cost sleep till the remaining time is 5ms
         while remaining_time > 0.005:
-            elapsed_time = time.perf_counter() - start_time
-            remaining_time = duration - elapsed_time
 
             # Sleep for half of the remaining time or minimum sleep interval
             time.sleep(max(remaining_time / 2, 0.0001))
+
+            elapsed_time = time.perf_counter() - start_time
+            remaining_time = duration - elapsed_time
+
+        # Switch to higher precision sleep
+        while remaining_time > 0:
+            elapsed_time = time.perf_counter() - start_time
+            remaining_time = duration - elapsed_time
+
+    @staticmethod
+    def sleep_generator(duration: float) -> Iterator[None]:
+        """Higher precision version of `time.sleep()`
+        This function also yields for every haft of remaining duration
+        """
+        start_time = time.perf_counter()
+        remaining_time = duration
+
+        # Low cost sleep till the remaining time is 5ms
+        while remaining_time > 0.005:
+
+            # Sleep for half of the remaining time or minimum sleep interval
+            time.sleep(max(remaining_time / 2, 0.0001))
+            yield
+
+            elapsed_time = time.perf_counter() - start_time
+            remaining_time = duration - elapsed_time
 
         # Switch to higher precision sleep
         while remaining_time > 0:
@@ -176,14 +197,12 @@ class PrimaryHyperburstMacro(BaseHyperburstMacro):
             remaining_time = duration - elapsed_time
 
     def press(self):
-        self.virtual_event.set()
         self.controller.press(self.button)
-        print('virtual_event: True')
+        print('virtual_event: press')
 
     def release(self):
-        self.virtual_event.set()
         self.controller.release(self.button)
-        print('virtual_event: True')
+        print('virtual_event: release')
 
     def macro(self) -> Iterator[None]:
         while True:
@@ -196,6 +215,8 @@ class PrimaryHyperburstMacro(BaseHyperburstMacro):
             yield
 
             self.sleep(self.sleep_after_burst)
+            # for _ in self.sleep_generator(self.sleep_after_burst):
+            #     yield
 
             self.press()
 
@@ -210,10 +231,10 @@ class ClickerThread(multiprocessing.Process):
         alive: Event,
     ):
         super().__init__(name='ClickerThread', daemon=True)
-        self.is_clicking = is_clicking
-        self.program_alive = alive
-        self.macro_queue = macro_queue
-        self.active_macro = starting_macro
+        self.is_clicking: Event = is_clicking
+        self.macro_queue: multiprocessing.Queue = macro_queue
+        self.active_macro: BaseHyperburstMacro = starting_macro
+        self.program_alive: Event = alive
         self.do_macro_steps = starting_macro.macro
 
     def do_macro_steps(self) -> Iterator[None]:
@@ -263,20 +284,14 @@ class StateControllerThread(threading.Thread):
     def should_ignore_event(self) -> bool:
         """Returns True if the event should be ignored, else False"""
 
-        # Acknowledge virtual event and skip event processing
-        if virtual_event.is_set():
-            virtual_event.clear()
-            print('Acknowledged virtual event.')
-            return True
-
         # This only occurs when the user presses the script toggle key
-        elif self.event.button.name == TOGGLE_KEYBIND and self.event.pressed:
+        if self.event.button.name == TOGGLE_KEYBIND and self.event.pressed:
             # Flip boolean
             self.toggle = not self.toggle
             print('Script toggled to', self.toggle)
             return True
 
-        # Allow de-press event to pass
+        # Allow release event to pass
         elif not self.event.pressed:
             return False
 
@@ -320,15 +335,25 @@ class StateControllerThread(threading.Thread):
 
 class MouseListenerThread(mouse.Listener):
     def __init__(self, *args, **kwargs):
-        super().__init__(on_click=self.on_click, daemon=True, *args, **kwargs)
-        self.valid = ('left', TOGGLE_KEYBIND)
-
+        super().__init__(
+            on_click=self.on_click,
+            daemon=True,
+            win32_event_filter=self.win32_event_filter,
+            *args,
+            **kwargs
+        )
+        # self.valid = ('left', TOGGLE_KEYBIND)
         self.start()
 
-    def on_click(self, *args: *RawMouseButtonEvent) -> None:
-        button, pressed = args[2:4]
-        if button.name in self.valid:
-            mouse_event_queue.put_nowait(MouseButtonEvent(button, pressed))
+    @staticmethod
+    def on_click(*args: *RawMouseButtonEvent) -> None:
+        mouse_event_queue.put_nowait(MouseButtonEvent(*args[2:4]))
+
+    @staticmethod
+    def win32_event_filter(msg, data):
+        if data.flags or msg not in (513, 514, 523, 524):
+            return False
+        # print(msg, data.mouseData, data.flags, data.time)
 
 
 def proc_input(cmd: str) -> None:
@@ -404,7 +429,7 @@ def get_initial_weapon() -> tuple[float, int, float]:
 
 
 def main() -> None:
-    global active_macro, mouse_event_queue, do_clicking, virtual_event, program_alive, is_rblx_focused, macro_queue
+    global active_macro, mouse_event_queue, do_clicking, program_alive, is_rblx_focused, macro_queue
 
     with multiprocessing.Manager() as manager:
         manager: SyncManager
@@ -413,15 +438,14 @@ def main() -> None:
         program_alive = multiprocessing.Event()
         program_alive.set()
 
-        macro_queue = multiprocessing.Queue()
         mouse_event_queue = queue.Queue()
         is_rblx_focused = manager.Event()
-        virtual_event = manager.Event()
-        do_clicking = manager.Event()
+        macro_queue = multiprocessing.Queue()
+        do_clicking = multiprocessing.Event()
 
         # Macros
         macro_args = WEAPON_ARGS or get_initial_weapon()
-        primary_macro = PrimaryHyperburstMacro(macro_args, virtual_event)
+        primary_macro = PrimaryHyperburstMacro(macro_args)
         active_macro = primary_macro
 
         # Start event processing threads
@@ -429,7 +453,7 @@ def main() -> None:
 
         state_controller_thread = StateControllerThread()  # noqa
 
-        clicker_thread = ClickerThread(do_clicking, macro_queue, primary_macro, program_alive)
+        clicker_thread = ClickerThread(do_clicking, macro_queue, active_macro, program_alive)
         clicker_thread.start()
 
         window_checker_thread = RobloxWindowFocusedChecker(is_rblx_focused, program_alive)
