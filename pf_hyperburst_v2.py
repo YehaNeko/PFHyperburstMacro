@@ -158,6 +158,7 @@ class PrimaryHyperburstMacro(BaseHyperburstMacro):
         """Higher precision version of `time.sleep()`"""
         start_time = time.perf_counter()
         remaining_time = duration
+        # TODO: check for max here
 
         # Low cost sleep till the remaining time is 5ms
         while remaining_time > 0.005:
@@ -211,10 +212,12 @@ class PrimaryHyperburstMacro(BaseHyperburstMacro):
                 self.sleep(self.delay_per_shot)
                 yield
 
+            # TODO: firecap should override last delay
             self.release()
-            yield
 
             self.sleep(self.sleep_after_burst)
+            yield
+
             # for _ in self.sleep_generator(self.sleep_after_burst):
             #     yield
 
