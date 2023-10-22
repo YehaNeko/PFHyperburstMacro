@@ -9,7 +9,7 @@ import queue
 import threading
 import multiprocessing
 from sys import exit
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from collections.abc import Iterator
 from ctypes import windll, create_unicode_buffer
 
@@ -20,7 +20,6 @@ from config import TOGGLE_KEYBIND, WEAPON_ARGS
 from base.macro import (
     RawMouseButtonEvent,
     MouseButtonEvent,
-    BaseMacro,
     BaseHyperburstMacro
 )
 
@@ -42,7 +41,7 @@ mouse_event_queue: queue.Queue
 macro_queue: multiprocessing.Queue
 
 
-macro_databank: dict[int, BaseMacro] = {}
+macro_databank: dict[int, BaseHyperburstMacro] = {}
 active_macro: PrimaryHyperburstMacro
 
 
@@ -157,14 +156,13 @@ class PrimaryHyperburstMacro(BaseHyperburstMacro):
     def sleep(duration: float) -> None:
         """Higher precision version of `time.sleep()`"""
         start_time = time.perf_counter()
-        remaining_time = duration
-        # TODO: check for max here
+        remaining_time = max(duration, 0.0001)
 
         # Low cost sleep till the remaining time is 5ms
         while remaining_time > 0.005:
 
             # Sleep for half of the remaining time or minimum sleep interval
-            time.sleep(max(remaining_time / 2, 0.0001))
+            time.sleep(remaining_time / 2)
 
             elapsed_time = time.perf_counter() - start_time
             remaining_time = duration - elapsed_time
@@ -180,13 +178,13 @@ class PrimaryHyperburstMacro(BaseHyperburstMacro):
         This function also yields for every haft of remaining duration
         """
         start_time = time.perf_counter()
-        remaining_time = duration
+        remaining_time = max(duration, 0.0001)
 
         # Low cost sleep till the remaining time is 5ms
         while remaining_time > 0.005:
 
             # Sleep for half of the remaining time or minimum sleep interval
-            time.sleep(max(remaining_time / 2, 0.0001))
+            time.sleep(remaining_time / 2)
             yield
 
             elapsed_time = time.perf_counter() - start_time
@@ -212,7 +210,6 @@ class PrimaryHyperburstMacro(BaseHyperburstMacro):
                 self.sleep(self.delay_per_shot)
                 yield
 
-            # TODO: firecap should override last delay
             self.release()
 
             self.sleep(self.sleep_after_burst)
@@ -224,50 +221,112 @@ class PrimaryHyperburstMacro(BaseHyperburstMacro):
             self.press()
 
 
+class PrimaryFirecapedHyperburstMacro(PrimaryHyperburstMacro):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self._shots: int = 1
+        self._sleep_after_burst: float = 0.000
+        self.half_sleep_after_burst: float = 0.000
+
+    @property
+    def sleep_after_burst(self) -> float:
+        return self._sleep_after_burst
+
+    @sleep_after_burst.setter
+    def sleep_after_burst(self, value) -> None:
+        self._sleep_after_burst = value
+        self.half_sleep_after_burst = value / 2
+
+    @property
+    def shots(self) -> int:
+        return self._shots
+
+    @shots.setter
+    def shots(self, value: int) -> None:
+        self._shots = value - 1
+
+    def macro(self) -> Iterator[None]:
+        while True:
+
+            for _ in range(self.shots):
+                self.sleep(self.delay_per_shot)
+                yield
+
+            self.sleep(self.half_sleep_after_burst)
+            self.release()
+            self.sleep(self.half_sleep_after_burst)
+            yield
+
+            self.press()
+
+
 # noinspection PyShadowingNames
 class ClickerThread(multiprocessing.Process):
     def __init__(
         self,
         is_clicking: Event,
         macro_queue: multiprocessing.Queue,
-        starting_macro: PrimaryHyperburstMacro,
+        macro_db: dict[int, BaseHyperburstMacro],
         alive: Event,
     ):
         super().__init__(name='ClickerThread', daemon=True)
         self.is_clicking: Event = is_clicking
         self.macro_queue: multiprocessing.Queue = macro_queue
-        self.active_macro: BaseHyperburstMacro = starting_macro
         self.program_alive: Event = alive
-        self.do_macro_steps = starting_macro.macro
 
-    def do_macro_steps(self) -> Iterator[None]:
-        """Placeholder"""
-        ...
+        self.macro_db = macro_db
+        self._active_macro: BaseHyperburstMacro = macro_db[0]
+        self.active_macro = self._active_macro
+
+        # Inital macro args taken from the inital active_macro
+        # TODO: make dynamic
+        self.last_macro_args: dict[str, Any] = {
+            k: v
+            for (k, v) in (
+                ('rpm', self.active_macro.rpm),
+                ('shots', self.active_macro.shots),
+                ('firecap', self.active_macro.firecap),
+            )
+        }
+
+    @property
+    def active_macro(self) -> Any:
+        return self._active_macro
+
+    @active_macro.setter
+    def active_macro(self, value: Any):
+        self._active_macro = value
+        self.do_macro_steps = value.macro
 
     def macro_loop(self) -> None:
-        macro_step = self.do_macro_steps()
-
         while self.program_alive.is_set():
             self.is_clicking.wait()
 
+            # Reset macro
+            do_macro_steps = self.do_macro_steps()
+
             while self.is_clicking.is_set():
                 print('do_macro_steps: next iter')
-                next(macro_step)
+                next(do_macro_steps)
 
-            # If we are here, `do_clicking` is False,
-            # so in return reset the macro
-            macro_step = self.do_macro_steps()
-
-    @staticmethod
-    def macro_queue_worker(self, queue: multiprocessing.Queue, alive):
-        while alive:
+    def macro_queue_worker(self, queue: multiprocessing.Queue, alive: Event):
+        while alive.is_set():
             attr, *args = queue.get()
+
+            if attr == 'change_macro':
+                self.active_macro = self.macro_db.get(args[0])
+
+                for item in self.last_macro_args.items():
+                    setattr(self.active_macro, *item)
+                continue
+
             setattr(self.active_macro, attr, args[0])
+            self.last_macro_args.update({attr: args[0]})
 
     def run(self) -> None:
         threading.Thread(
             target=self.macro_queue_worker,
-            args=(self, self.macro_queue, self.program_alive),
+            args=(self.macro_queue, self.program_alive),
             daemon=True
         ).start()
 
@@ -360,55 +419,79 @@ class MouseListenerThread(mouse.Listener):
 
 
 def proc_input(cmd: str) -> None:
+    def set_rpm(arg: Any):
+        macro_queue.put_nowait(('rpm', float(arg)))
+        print('RPM set!')
+
+    def set_shots(arg: Any):
+        macro_queue.put_nowait(('shots', int(arg)))
+        print('Shots set!')
+
+    def set_firecap(arg: Any):
+        firecap = float(arg)
+
+        if firecap <= 0:
+            macro_queue.put_nowait(('change_macro', 0))
+        else:
+            macro_queue.put_nowait(('change_macro', 1))
+
+        macro_queue.put_nowait(('firecap', float(arg)))
+        print('Firecap set!')
+
+    def _set(*_args: tuple[Any]):
+        set_rpm(_args[0])
+        set_shots(_args[1])
+
+        # Optionals
+        if len(_args) >= 3:
+            set_firecap(_args[2])
+            return
+
+    def do_quit():
+        program_alive.clear()
+
+    def do_reset():
+        print('Reseting...\nNote that this currently does not get rid of old instances.')
+        program_alive.clear()
+        os.execl(sys.executable, sys.executable, *sys.argv)
+
+    # fmt: off
+    commands: dict[str, callable] = {
+        'rpm':     set_rpm,
+        'shots':   set_shots,
+        'firecap': set_firecap,
+        'set':     _set,
+
+        'q':    do_quit,
+        'quit': do_quit,
+        'exit': do_quit,
+
+        'r':     do_reset,
+        'reset': do_reset,
+    }
+    # fmt: on
+
     cmd, *args = cmd.split(' ')
     cmd = cmd.lower()
 
     if not cmd:
         return
 
+    action = commands.get(cmd)
+
+    if action is None:
+        print('Unknown command.')
+        return
+
     try:
-        if cmd == 'rpm':
-            macro_queue.put_nowait(('rpm', float(args[0])))
-            print('RPM set!')
-
-        elif cmd == 'shots':
-            macro_queue.put_nowait(('shots', float(args[0])))
-            print('Shots set!')
-
-        elif cmd == 'firecap':
-            macro_queue.put_nowait(('firecap', float(args[0])))
-            print('Firecap set!')
-
-        elif cmd == 'set':
-            macro_queue.put_nowait(('rpm', float(args[0])))
-            macro_queue.put_nowait(('shots', int(args[1])))
-
-            # Optionals
-            if len(args) >= 3:
-                macro_queue.put_nowait(('firecap', float(args[2])))
-                print('RPM, Shots and Firecap set!')
-                return
-
-            print('RPM and Shots set!')
-
-        elif cmd in ('q', 'quit', 'exit'):
-            program_alive.clear()
-
-        elif cmd in ('r', 'reset'):
-            print('Reseting...\nNote that this currently does not get rid of old instances.')
-            program_alive.clear()
-            os.execl(sys.executable, sys.executable, *sys.argv)
-
-        else:
-            print('Unknown command.')
-
+        action(*args)
     except (ValueError, IndexError):
         print('Invalid input.')
 
 
 def get_initial_weapon() -> tuple[float, int, float]:
     opt = {
-        'firecap': 0
+        'firecap': 0.0
     }
 
     opt_values = list(opt.values())
@@ -424,9 +507,11 @@ def get_initial_weapon() -> tuple[float, int, float]:
                 given = len(optionals)
 
                 for i in range(given):
-                    opt_values[i] = optionals[i]
+                    original_type: Any = type(opt_values[i])
+                    opt_values[i] = original_type(optionals[i])
 
             return rpm, shots, *opt_values
+
         except Exception:  # noqa
             print('\nInvalid input. Try again.')
 
@@ -448,16 +533,18 @@ def main() -> None:
 
         # Macros
         macro_args = WEAPON_ARGS or get_initial_weapon()
+
         primary_macro = PrimaryHyperburstMacro(macro_args)
-        active_macro = primary_macro
+        primary_firecaped_macro = PrimaryFirecapedHyperburstMacro(macro_args)
+        macro_databank.update({0: primary_macro, 1: primary_firecaped_macro})
 
         # Start event processing threads
         mouse_listener_thread = MouseListenerThread()  # noqa
-
         state_controller_thread = StateControllerThread()  # noqa
 
-        clicker_thread = ClickerThread(do_clicking, macro_queue, active_macro, program_alive)
+        clicker_thread = ClickerThread(do_clicking, macro_queue, macro_databank, program_alive)
         clicker_thread.start()
+        proc_input('set ' + ' '.join(str(i) for i in macro_args))  # Cursed workaround
 
         window_checker_thread = RobloxWindowFocusedChecker(is_rblx_focused, program_alive)
         window_checker_thread.start()
