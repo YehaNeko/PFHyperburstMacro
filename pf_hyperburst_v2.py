@@ -9,14 +9,17 @@ import queue
 import threading
 import multiprocessing
 from sys import exit
+from pynput import mouse
 from typing import TYPE_CHECKING, Any
-from collections.abc import Iterator
 from ctypes import windll, create_unicode_buffer
 
-from pynput import mouse
-from pynput.mouse import Button
+from config import TOGGLE_KEYBIND, TOGGLE_AUTOCLIKER, WEAPON_ARGS
 
-from config import TOGGLE_KEYBIND, WEAPON_ARGS
+from macros import (
+    PrimaryHyperburstMacro,
+    PrimaryFirecapedHyperburstMacro,
+    AutoclickerMacro
+)
 from base.macro import (
     RawMouseButtonEvent,
     MouseButtonEvent,
@@ -52,7 +55,7 @@ class RobloxWindowFocusedChecker(multiprocessing.Process):
         alive: Event
     ):
         super().__init__(
-            name='RobloxWindowFocusedCheckerThread',
+            name='pfhyperburstmacro-roblox-window-checker',
             daemon=True
         )
         self.is_roblox: Event = is_roblox
@@ -96,170 +99,6 @@ class RobloxWindowFocusedChecker(multiprocessing.Process):
         self.check_focused()
 
 
-class PrimaryHyperburstMacro(BaseHyperburstMacro):
-    def __init__(self, args: tuple[float, int, float]):
-        from config import (
-            ADD_DELAY_PER_SHOT,
-            SLEEP_AFTER_BURST,
-            THE_LITO_FACTOR
-        )
-
-        self.controller = mouse.Controller()
-        self.button: Button = Button.left
-        rpm, shots, firecap = args
-
-        self._firecap: float = 0.0
-        self._rpm: float = rpm
-        self.shots: int = shots
-
-        # Defaults
-        self.the_lito_factor = THE_LITO_FACTOR
-
-        # Fine-tuning
-        self.default_sleep_after_burst = SLEEP_AFTER_BURST
-        self.add_delay_per_shot = ADD_DELAY_PER_SHOT
-
-        # Determined automatically
-        self.sleep_after_burst = self.default_sleep_after_burst
-        self.delay_per_shot: float = 0.000
-        self.rpm = self._rpm
-
-    @property
-    def rpm(self) -> float:
-        return self._rpm
-
-    @rpm.setter
-    def rpm(self, value: float) -> None:
-        self._rpm = value
-
-        self.delay_per_shot = 1 / (self._rpm / 60)
-        self.delay_per_shot = round(self.delay_per_shot, 6)
-        self.delay_per_shot += self.add_delay_per_shot
-
-    @property
-    def firecap(self) -> float:
-        return self._firecap
-
-    @firecap.setter
-    def firecap(self, value: float) -> None:
-        self._firecap = value
-
-        if not value == 0:
-            val = 60 / value
-            val = round(val, 6)
-            val += self.the_lito_factor
-            self.sleep_after_burst = val
-        else:
-            self.sleep_after_burst = self.default_sleep_after_burst
-
-    @staticmethod
-    def sleep(duration: float) -> None:
-        """Higher precision version of `time.sleep()`"""
-        start_time = time.perf_counter()
-        remaining_time = max(duration, 0.0001)
-
-        # Low cost sleep till the remaining time is 5ms
-        while remaining_time > 0.005:
-
-            # Sleep for half of the remaining time or minimum sleep interval
-            time.sleep(remaining_time / 2)
-
-            elapsed_time = time.perf_counter() - start_time
-            remaining_time = duration - elapsed_time
-
-        # Switch to higher precision sleep
-        while remaining_time > 0:
-            elapsed_time = time.perf_counter() - start_time
-            remaining_time = duration - elapsed_time
-
-    @staticmethod
-    def sleep_generator(duration: float) -> Iterator[None]:
-        """Higher precision version of `time.sleep()`
-        This function also yields for every haft of remaining duration
-        """
-        start_time = time.perf_counter()
-        remaining_time = max(duration, 0.0001)
-
-        # Low cost sleep till the remaining time is 5ms
-        while remaining_time > 0.005:
-
-            # Sleep for half of the remaining time or minimum sleep interval
-            time.sleep(remaining_time / 2)
-            yield
-
-            elapsed_time = time.perf_counter() - start_time
-            remaining_time = duration - elapsed_time
-
-        # Switch to higher precision sleep
-        while remaining_time > 0:
-            elapsed_time = time.perf_counter() - start_time
-            remaining_time = duration - elapsed_time
-
-    def press(self):
-        self.controller.press(self.button)
-        print('virtual_event: press')
-
-    def release(self):
-        self.controller.release(self.button)
-        print('virtual_event: release')
-
-    def macro(self) -> Iterator[None]:
-        while True:
-
-            for _ in range(self.shots):
-                self.sleep(self.delay_per_shot)
-                yield
-
-            self.release()
-
-            self.sleep(self.sleep_after_burst)
-            yield
-
-            # for _ in self.sleep_generator(self.sleep_after_burst):
-            #     yield
-
-            self.press()
-
-
-class PrimaryFirecapedHyperburstMacro(PrimaryHyperburstMacro):
-    def __init__(self, *args):
-        super().__init__(*args)
-        self._shots: int = 1
-        self._sleep_after_burst: float = 0.000
-        self.half_sleep_after_burst: float = 0.000
-
-    @property
-    def sleep_after_burst(self) -> float:
-        return self._sleep_after_burst
-
-    @sleep_after_burst.setter
-    def sleep_after_burst(self, value) -> None:
-        self._sleep_after_burst = value
-        self.half_sleep_after_burst = value / 2
-
-    @property
-    def shots(self) -> int:
-        return self._shots
-
-    @shots.setter
-    def shots(self, value: int) -> None:
-        self._shots = value - 1
-
-    def macro(self) -> Iterator[None]:
-        while True:
-
-            for _ in range(self.shots):
-                self.sleep(self.delay_per_shot)
-                yield
-
-            self.sleep(self.half_sleep_after_burst)
-            self.release()
-            self.sleep(self.half_sleep_after_burst)
-            yield
-
-            self.press()
-
-
 # noinspection PyShadowingNames
 class ClickerThread(multiprocessing.Process):
     def __init__(
@@ -269,14 +108,18 @@ class ClickerThread(multiprocessing.Process):
         macro_db: dict[int, BaseHyperburstMacro],
         alive: Event,
     ):
-        super().__init__(name='ClickerThread', daemon=True)
+        super().__init__(name='pfhyperburstmacro-clicker-thread', daemon=True)
         self.is_clicking: Event = is_clicking
         self.macro_queue: multiprocessing.Queue = macro_queue
         self.program_alive: Event = alive
 
         self.macro_db = macro_db
+        self.current_macro_index: int = 0
         self._active_macro: BaseHyperburstMacro = macro_db[0]
         self.active_macro = self._active_macro
+
+        self.autoclicker_toggled: bool = False
+        self.last_non_toggled_macro_index: int = 0
 
         # Inital macro args taken from the inital active_macro
         # TODO: make dynamic
@@ -285,7 +128,7 @@ class ClickerThread(multiprocessing.Process):
             for (k, v) in (
                 ('rpm', self.active_macro.rpm),
                 ('shots', self.active_macro.shots),
-                ('firecap', self.active_macro.firecap),
+                ('firecap', self.active_macro.firecap)
             )
         }
 
@@ -309,15 +152,36 @@ class ClickerThread(multiprocessing.Process):
                 print('do_macro_steps: next iter')
                 next(do_macro_steps)
 
+    def change_macro(self, idx):
+        self.active_macro = self.macro_db.get(idx)
+        self.current_macro_index = idx
+
+        if not self.autoclicker_toggled:
+            self.last_non_toggled_macro_index = idx
+
+        for item in self.last_macro_args.items():
+            setattr(self.active_macro, *item)
+
+    def toggle_macro(self, idx):
+        if self.autoclicker_toggled:
+            self.change_macro(self.last_non_toggled_macro_index)
+            self.autoclicker_toggled = False
+            return
+
+        self.change_macro(idx)
+        self.autoclicker_toggled = True
+
     def macro_queue_worker(self, queue: multiprocessing.Queue, alive: Event):
         while alive.is_set():
             attr, *args = queue.get()
 
             if attr == 'change_macro':
-                self.active_macro = self.macro_db.get(args[0])
+                self.change_macro(args[0])
+                continue
 
-                for item in self.last_macro_args.items():
-                    setattr(self.active_macro, *item)
+            elif attr == 'toggle_macro':
+                self.toggle_macro(2)
+                print('guh')
                 continue
 
             setattr(self.active_macro, attr, args[0])
@@ -327,6 +191,7 @@ class ClickerThread(multiprocessing.Process):
         threading.Thread(
             target=self.macro_queue_worker,
             args=(self.macro_queue, self.program_alive),
+            name='pfhyperburstmacro-macro-queue-worker-thread',
             daemon=True
         ).start()
 
@@ -337,9 +202,15 @@ class StateControllerThread(threading.Thread):
     event: MouseButtonEvent
 
     def __init__(self, *args, **kwargs):
-        super().__init__(name='StateControllerThread', daemon=True, *args, **kwargs)
+        super().__init__(name='pfhyperburstmacro-state-controller-thread', daemon=True, *args, **kwargs)
         self.queue: queue.Queue = mouse_event_queue
         self.toggle: bool = True
+        self.last_macro: int = 0
+
+        self.button_to_event: dict[str, callable] = {
+            'left': self.set_clicking,
+            TOGGLE_AUTOCLIKER: self.toggle_autocliker
+        }
 
         self.start()
 
@@ -371,6 +242,20 @@ class StateControllerThread(threading.Thread):
         # If we are here, the event should pass
         return False
 
+    def set_clicking(self):
+        if self.event.pressed:
+            do_clicking.set()
+            print('Clicking: True')
+        else:
+            # if event.release:
+            do_clicking.clear()
+            print('Clicking: False')
+
+    def toggle_autocliker(self):
+        print('guh')
+        if self.event.pressed:
+            macro_queue.put_nowait(('toggle_macro', 2))
+
     def state_controller(self):
         while program_alive.is_set():
             self.event: MouseButtonEvent = self.queue.get()
@@ -380,14 +265,9 @@ class StateControllerThread(threading.Thread):
             if self.should_ignore_event():
                 continue
 
-            # Process events
-            if self.event.pressed:
-                do_clicking.set()
-                print('Clicking: True')
-            else:
-                # if event.release:
-                do_clicking.clear()
-                print('Clicking: False')
+            event = self.button_to_event.get(self.event.button.name)
+            if event is not None:
+                event()
 
             self.queue.task_done()
 
@@ -398,9 +278,10 @@ class StateControllerThread(threading.Thread):
 class MouseListenerThread(mouse.Listener):
     def __init__(self, *args, **kwargs):
         super().__init__(
+            name='pfhyperburstmacro-mouse-listener-thread',
+            win32_event_filter=self.win32_event_filter,
             on_click=self.on_click,
             daemon=True,
-            win32_event_filter=self.win32_event_filter,
             *args,
             **kwargs
         )
@@ -418,7 +299,7 @@ class MouseListenerThread(mouse.Listener):
         # print(msg, data.mouseData, data.flags, data.time)
 
 
-def proc_input(cmd: str) -> None:
+def proc_command(cmd: str, args: tuple[Any]):
     def set_rpm(arg: Any):
         macro_queue.put_nowait(('rpm', float(arg)))
         print('RPM set!')
@@ -471,12 +352,6 @@ def proc_input(cmd: str) -> None:
     }
     # fmt: on
 
-    cmd, *args = cmd.split(' ')
-    cmd = cmd.lower()
-
-    if not cmd:
-        return
-
     action = commands.get(cmd)
 
     if action is None:
@@ -487,6 +362,16 @@ def proc_input(cmd: str) -> None:
         action(*args)
     except (ValueError, IndexError):
         print('Invalid input.')
+
+
+def proc_input(cmd: str) -> None:
+    cmd, *args = cmd.split(' ')
+    cmd = cmd.lower()
+
+    if not cmd:
+        return
+
+    proc_command(cmd, args)
 
 
 def get_initial_weapon() -> tuple[float, int, float]:
@@ -536,7 +421,8 @@ def main() -> None:
 
         primary_macro = PrimaryHyperburstMacro(macro_args)
         primary_firecaped_macro = PrimaryFirecapedHyperburstMacro(macro_args)
-        macro_databank.update({0: primary_macro, 1: primary_firecaped_macro})
+        autocliker_macro = AutoclickerMacro()
+        macro_databank.update({0: primary_macro, 1: primary_firecaped_macro, 2: autocliker_macro})
 
         # Start event processing threads
         mouse_listener_thread = MouseListenerThread()  # noqa
@@ -544,7 +430,7 @@ def main() -> None:
 
         clicker_thread = ClickerThread(do_clicking, macro_queue, macro_databank, program_alive)
         clicker_thread.start()
-        proc_input('set ' + ' '.join(str(i) for i in macro_args))  # Cursed workaround
+        proc_command('set', macro_args)  # Cursed workaround
 
         window_checker_thread = RobloxWindowFocusedChecker(is_rblx_focused, program_alive)
         window_checker_thread.start()
