@@ -49,15 +49,8 @@ active_macro: PrimaryHyperburstMacro
 
 
 class RobloxWindowFocusedChecker(multiprocessing.Process):
-    def __init__(
-        self,
-        is_roblox: Event,
-        alive: Event
-    ):
-        super().__init__(
-            name='pfhyperburstmacro-roblox-window-checker',
-            daemon=True
-        )
+    def __init__(self, is_roblox: Event, alive: Event):
+        super().__init__(name='pfhyperburstmacro-roblox-window-checker', daemon=True)
         self.is_roblox: Event = is_roblox
         self.program_alive: Event = alive
 
@@ -102,13 +95,14 @@ class RobloxWindowFocusedChecker(multiprocessing.Process):
 # noinspection PyShadowingNames
 class ClickerThread(multiprocessing.Process):
     def __init__(
-            self,
-            is_clicking: Event,
-            macro_queue: multiprocessing.Queue,
-            macro_db: dict[int, BaseHyperburstMacro],
-            alive: Event,
+        self,
+        is_clicking: Event,
+        macro_queue: multiprocessing.Queue,
+        macro_db: dict[int, BaseHyperburstMacro],
+        alive: Event,
     ):
         super().__init__(name='pfhyperburstmacro-clicker-thread', daemon=True)
+
         self.is_clicking: Event = is_clicking
         self.macro_queue: multiprocessing.Queue = macro_queue
         self.program_alive: Event = alive
@@ -195,9 +189,9 @@ class ClickerThread(multiprocessing.Process):
 
     def run(self) -> None:
         threading.Thread(
-            target=self.macro_queue_worker,
-            args=(self.macro_queue, self.program_alive),
             name='pfhyperburstmacro-macro-queue-worker-thread',
+            args=(self.macro_queue, self.program_alive),
+            target=self.macro_queue_worker,
             daemon=True
         ).start()
 
@@ -207,8 +201,9 @@ class ClickerThread(multiprocessing.Process):
 class StateControllerThread(threading.Thread):
     event: MouseButtonEvent
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(name='pfhyperburstmacro-state-controller-thread', daemon=True, *args, **kwargs)
+    def __init__(self):
+        super().__init__(name='pfhyperburstmacro-state-controller-thread', daemon=True)
+
         self.queue: queue.Queue = mouse_event_queue
         self.toggle: bool = True
         self.last_macro: int = 0
@@ -283,14 +278,12 @@ class StateControllerThread(threading.Thread):
 
 # noinspection PyUnusedLocal
 class MouseListenerThread(mouse.Listener):
-    def __init__(self, *args, **kwargs):
+    def __init__(self):
         super().__init__(
             name='pfhyperburstmacro-mouse-listener-thread',
             win32_event_filter=self.win32_event_filter,
             on_click=self.on_click,
-            daemon=True,
-            *args,
-            **kwargs
+            daemon=True
         )
         self.start()
 
