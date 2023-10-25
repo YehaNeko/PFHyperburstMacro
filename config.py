@@ -1,8 +1,8 @@
 
 # Keybindings
 # Can only be 'x1' or 'x2' for now
-TOGGLE_KEYBIND = 'x2'          # Mouse back key
-TOGGLE_AUTOCLIKER = 'x1'
+TOGGLE_KEYBIND = 'x1'          # Mouse BACK key
+TOGGLE_AUTOCLIKER = 'x2'       # Mouse FORWARD key
 
 # The starting arguments for your weapon
 # Example: WEAPON_ARGS = 1000, 3, 0

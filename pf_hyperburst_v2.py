@@ -102,11 +102,11 @@ class RobloxWindowFocusedChecker(multiprocessing.Process):
 # noinspection PyShadowingNames
 class ClickerThread(multiprocessing.Process):
     def __init__(
-        self,
-        is_clicking: Event,
-        macro_queue: multiprocessing.Queue,
-        macro_db: dict[int, BaseHyperburstMacro],
-        alive: Event,
+            self,
+            is_clicking: Event,
+            macro_queue: multiprocessing.Queue,
+            macro_db: dict[int, BaseHyperburstMacro],
+            alive: Event,
     ):
         super().__init__(name='pfhyperburstmacro-clicker-thread', daemon=True)
         self.is_clicking: Event = is_clicking
@@ -114,12 +114,12 @@ class ClickerThread(multiprocessing.Process):
         self.program_alive: Event = alive
 
         self.macro_db = macro_db
-        self.current_macro_index: int = 0
-        self._active_macro: BaseHyperburstMacro = macro_db[0]
+        self.active_macro_id: int = 0
+        self._active_macro: BaseHyperburstMacro = macro_db[self.active_macro_id]
         self.active_macro = self._active_macro
 
-        self.autoclicker_toggled: bool = False
-        self.last_non_toggled_macro_index: int = 0
+        self.autoclicker_macro_id: int = 2
+        self.last_non_toggled_macro_id: int = self.active_macro_id
 
         # Inital macro args taken from the inital active_macro
         # TODO: make dynamic
@@ -137,39 +137,35 @@ class ClickerThread(multiprocessing.Process):
         return self._active_macro
 
     @active_macro.setter
-    def active_macro(self, value: Any):
+    def active_macro(self, value: Any) -> None:
         self._active_macro = value
         self.do_macro_steps = value.macro
 
-    def macro_loop(self) -> None:
-        while self.program_alive.is_set():
-            self.is_clicking.wait()
+    def is_autoclicker(self) -> bool:
+        return self.active_macro_id == self.autoclicker_macro_id
 
-            # Reset macro
-            do_macro_steps = self.do_macro_steps()
-
-            while self.is_clicking.is_set():
-                print('do_macro_steps: next iter')
-                next(do_macro_steps)
-
-    def change_macro(self, idx):
+    def set_macro(self, idx: int) -> None:
         self.active_macro = self.macro_db.get(idx)
-        self.current_macro_index = idx
-
-        if not self.autoclicker_toggled:
-            self.last_non_toggled_macro_index = idx
-
+        self.active_macro_id = idx
         for item in self.last_macro_args.items():
             setattr(self.active_macro, *item)
 
-    def toggle_macro(self, idx):
-        if self.autoclicker_toggled:
-            self.change_macro(self.last_non_toggled_macro_index)
-            self.autoclicker_toggled = False
+    def change_macro(self, idx: int) -> None:
+        # Don't set active macro if we are on a toggle mode
+        if self.is_autoclicker():
+            self.last_non_toggled_macro_id = idx
             return
 
-        self.change_macro(idx)
-        self.autoclicker_toggled = True
+        self.last_non_toggled_macro_id = idx
+        self.set_macro(self.last_non_toggled_macro_id)
+
+    def toggle_macro(self, idx: int) -> None:
+        if self.is_autoclicker():
+            self.set_macro(self.last_non_toggled_macro_id)
+            return
+
+        self.last_non_toggled_macro_id = self.active_macro_id
+        self.set_macro(idx)
 
     def macro_queue_worker(self, queue: multiprocessing.Queue, alive: Event):
         while alive.is_set():
@@ -181,11 +177,21 @@ class ClickerThread(multiprocessing.Process):
 
             elif attr == 'toggle_macro':
                 self.toggle_macro(2)
-                print('guh')
                 continue
 
             setattr(self.active_macro, attr, args[0])
             self.last_macro_args.update({attr: args[0]})
+
+    def macro_loop(self) -> None:
+        while self.program_alive.is_set():
+            self.is_clicking.wait()
+
+            # Reset macro
+            do_macro_steps = self.do_macro_steps()
+
+            while self.is_clicking.is_set():
+                print('do_macro_steps: next iter')
+                next(do_macro_steps)
 
     def run(self) -> None:
         threading.Thread(
@@ -242,7 +248,7 @@ class StateControllerThread(threading.Thread):
         # If we are here, the event should pass
         return False
 
-    def set_clicking(self):
+    def set_clicking(self) -> None:
         if self.event.pressed:
             do_clicking.set()
             print('Clicking: True')
@@ -251,8 +257,7 @@ class StateControllerThread(threading.Thread):
             do_clicking.clear()
             print('Clicking: False')
 
-    def toggle_autocliker(self):
-        print('guh')
+    def toggle_autocliker(self) -> None:
         if self.event.pressed:
             macro_queue.put_nowait(('toggle_macro', 2))
 

@@ -11,13 +11,56 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 
-class PrimaryHyperburstMacro(BaseHyperburstMacro):
+class PrecisionSleepMixin:
+    @staticmethod
+    def sleep(duration: float) -> None:
+        """Higher precision version of `time.sleep()`"""
+        start_time = time.perf_counter()
+        remaining_time = max(duration, 0.0001)
+
+        # Low cost sleep till the remaining time is 5ms
+        while remaining_time > 0.005:
+
+            # Sleep for half of the remaining time or minimum sleep interval
+            time.sleep(remaining_time / 2)
+
+            elapsed_time = time.perf_counter() - start_time
+            remaining_time = duration - elapsed_time
+
+        # Switch to higher precision sleep
+        while remaining_time > 0:
+            elapsed_time = time.perf_counter() - start_time
+            remaining_time = duration - elapsed_time
+
+
+class PrecisionSleepGeneratorMixin:
+    @staticmethod
+    def sleep_generator(duration: float) -> Iterator[None]:
+        """Higher precision version of `time.sleep()`
+        This function also yields for every haft of remaining duration
+        """
+        start_time = time.perf_counter()
+        remaining_time = max(duration, 0.0001)
+
+        # Low cost sleep till the remaining time is 5ms
+        while remaining_time > 0.005:
+
+            # Sleep for half of the remaining time or minimum sleep interval
+            time.sleep(remaining_time / 2)
+            yield
+
+            elapsed_time = time.perf_counter() - start_time
+            remaining_time = duration - elapsed_time
+
+        # Switch to higher precision sleep
+        while remaining_time > 0:
+            elapsed_time = time.perf_counter() - start_time
+            remaining_time = duration - elapsed_time
+
+
+class PrimaryHyperburstMacro(BaseHyperburstMacro, PrecisionSleepMixin):
     def __init__(self, args: tuple[float, int, float]):
-        from config import (
-            ADD_DELAY_PER_SHOT,
-            SLEEP_AFTER_BURST,
-            THE_LITO_FACTOR
-        )
+        from config import ADD_DELAY_PER_SHOT, SLEEP_AFTER_BURST, THE_LITO_FACTOR
 
         self.controller = mouse.Controller()
         self.button: Button = Button.left
@@ -66,49 +109,6 @@ class PrimaryHyperburstMacro(BaseHyperburstMacro):
             self.sleep_after_burst = val
         else:
             self.sleep_after_burst = self.default_sleep_after_burst
-
-    @staticmethod
-    def sleep(duration: float) -> None:
-        """Higher precision version of `time.sleep()`"""
-        start_time = time.perf_counter()
-        remaining_time = max(duration, 0.0001)
-
-        # Low cost sleep till the remaining time is 5ms
-        while remaining_time > 0.005:
-
-            # Sleep for half of the remaining time or minimum sleep interval
-            time.sleep(remaining_time / 2)
-
-            elapsed_time = time.perf_counter() - start_time
-            remaining_time = duration - elapsed_time
-
-        # Switch to higher precision sleep
-        while remaining_time > 0:
-            elapsed_time = time.perf_counter() - start_time
-            remaining_time = duration - elapsed_time
-
-    @staticmethod
-    def sleep_generator(duration: float) -> Iterator[None]:
-        """Higher precision version of `time.sleep()`
-        This function also yields for every haft of remaining duration
-        """
-        start_time = time.perf_counter()
-        remaining_time = max(duration, 0.0001)
-
-        # Low cost sleep till the remaining time is 5ms
-        while remaining_time > 0.005:
-
-            # Sleep for half of the remaining time or minimum sleep interval
-            time.sleep(remaining_time / 2)
-            yield
-
-            elapsed_time = time.perf_counter() - start_time
-            remaining_time = duration - elapsed_time
-
-        # Switch to higher precision sleep
-        while remaining_time > 0:
-            elapsed_time = time.perf_counter() - start_time
-            remaining_time = duration - elapsed_time
 
     def press(self):
         self.controller.press(self.button)
@@ -175,34 +175,14 @@ class PrimaryFirecapedHyperburstMacro(PrimaryHyperburstMacro):
             self.press()
 
 
-class AutoclickerMacro(BaseMacro):
+class AutoclickerMacro(BaseMacro, PrecisionSleepMixin):
     def __init__(self):
         self.controller = mouse.Controller()
 
-    @staticmethod
-    def sleep(duration: float) -> None:
-        """Higher precision version of `time.sleep()`"""
-        start_time = time.perf_counter()
-        remaining_time = max(duration, 0.0001)
-
-        # Low cost sleep till the remaining time is 5ms
-        while remaining_time > 0.005:
-
-            # Sleep for half of the remaining time or minimum sleep interval
-            time.sleep(remaining_time / 2)
-
-            elapsed_time = time.perf_counter() - start_time
-            remaining_time = duration - elapsed_time
-
-        # Switch to higher precision sleep
-        while remaining_time > 0:
-            elapsed_time = time.perf_counter() - start_time
-            remaining_time = duration - elapsed_time
-
     def macro(self) -> Iterator[None]:
         while True:
-            self.sleep(0.001)
+            self.sleep(0.004)
             self.controller.release(Button.left)
-            self.sleep(0.001)
+            self.sleep(0.004)
             yield
             self.controller.press(Button.left)
