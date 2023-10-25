@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from multiprocessing.managers import SyncManager
 
 
-__author__ = '@yeha.'
+__author__ = '@YehaNeko'  # @yeha. on discord
 __copyright__ = 'my nuts'
 
 
@@ -220,34 +220,6 @@ class StateControllerThread(threading.Thread):
 
         self.start()
 
-    def should_ignore_event(self) -> bool:
-        """Returns True if the event should be ignored, else False"""
-
-        # This only occurs when the user presses the script toggle key
-        if self.event.button.name == TOGGLE_KEYBIND and self.event.pressed:
-            # Flip boolean
-            self.toggle = not self.toggle
-            print('Script toggled to', self.toggle)
-            return True
-
-        # Allow release event to pass
-        elif not self.event.pressed:
-            return False
-
-        # Ignore events if roblox is not focused
-        elif not is_rblx_focused.is_set():
-            do_clicking.clear()
-            print('Roblox not focused. Skipping.')
-            return True
-
-        # Stops events from being processed
-        elif not self.toggle:
-            print('Script is toggled False. Skipping.')
-            return True
-
-        # If we are here, the event should pass
-        return False
-
     def set_clicking(self) -> None:
         if self.event.pressed:
             do_clicking.set()
@@ -261,15 +233,44 @@ class StateControllerThread(threading.Thread):
         if self.event.pressed:
             macro_queue.put_nowait(('toggle_macro', 2))
 
+    def should_event_pass(self) -> bool:
+        """Returns True if the event should pass, else False"""
+
+        # This only occurs when the user presses the script toggle key
+        if self.event.button.name == TOGGLE_KEYBIND and self.event.pressed:
+            # Flip boolean
+            self.toggle = not self.toggle
+            print('Script toggled to', self.toggle)
+            return False
+
+        # Allow release event to pass
+        elif not self.event.pressed:
+            return True
+
+        # Ignore events if roblox is not focused
+        elif not is_rblx_focused.is_set():
+            do_clicking.clear()
+            print('Roblox not focused. Skipping.')
+            return False
+
+        # Stops events from being processed
+        elif not self.toggle:
+            print('Script is toggled False. Skipping.')
+            return False
+
+        # If we are here, the event should pass
+        return True
+
     def state_controller(self):
         while program_alive.is_set():
             self.event: MouseButtonEvent = self.queue.get()
             print('Got event:', self.event)
 
             # Skip processing events if toggled
-            if self.should_ignore_event():
+            if not self.should_event_pass():
                 continue
 
+            # Get the keybind bound to the current event
             event = self.button_to_event.get(self.event.button.name)
             if event is not None:
                 event()
@@ -280,6 +281,7 @@ class StateControllerThread(threading.Thread):
         self.state_controller()
 
 
+# noinspection PyUnusedLocal
 class MouseListenerThread(mouse.Listener):
     def __init__(self, *args, **kwargs):
         super().__init__(
@@ -290,7 +292,6 @@ class MouseListenerThread(mouse.Listener):
             *args,
             **kwargs
         )
-        # self.valid = ('left', TOGGLE_KEYBIND)
         self.start()
 
     @staticmethod
@@ -299,9 +300,9 @@ class MouseListenerThread(mouse.Listener):
 
     @staticmethod
     def win32_event_filter(msg, data):
-        if data.flags or msg not in (513, 514, 523, 524):
+        """Filter out virtual events."""
+        if data.flags:
             return False
-        # print(msg, data.mouseData, data.flags, data.time)
 
 
 def proc_command(cmd: str, args: tuple[Any]):
@@ -348,12 +349,12 @@ def proc_command(cmd: str, args: tuple[Any]):
         'firecap': set_firecap,
         'set':     _set,
 
-        'q':    do_quit,
-        'quit': do_quit,
-        'exit': do_quit,
+        'q':       do_quit,
+        'quit':    do_quit,
+        'exit':    do_quit,
 
-        'r':     do_reset,
-        'reset': do_reset,
+        'r':       do_reset,
+        'reset':   do_reset,
     }
     # fmt: on
 
@@ -389,7 +390,8 @@ def get_initial_weapon() -> tuple[float, int, float]:
 
     while True:
         try:
-            rpm, shots, *optionals = input(f'Input weapon stats:\n(RPM) (shots per burst) {opt_fmt}\n').split(' ')
+            weapon_stats: str = input(f'Input weapon stats:\n(RPM) (shots per burst) {opt_fmt}\n')
+            rpm, shots, *optionals = weapon_stats.strip().split(' ')
             rpm, shots = float(rpm), int(shots)
 
             # Optionals
@@ -424,9 +426,9 @@ def main() -> None:
         # Macros
         macro_args = WEAPON_ARGS or get_initial_weapon()
 
+        autocliker_macro = AutoclickerMacro()
         primary_macro = PrimaryHyperburstMacro(macro_args)
         primary_firecaped_macro = PrimaryFirecapedHyperburstMacro(macro_args)
-        autocliker_macro = AutoclickerMacro()
         macro_databank.update({0: primary_macro, 1: primary_firecaped_macro, 2: autocliker_macro})
 
         # Start event processing threads
