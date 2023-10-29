@@ -44,10 +44,6 @@ mouse_event_queue: queue.Queue
 macro_queue: multiprocessing.Queue
 
 
-macro_databank: dict[int, BaseHyperburstMacro] = {}
-active_macro: PrimaryHyperburstMacro
-
-
 class RobloxWindowFocusedChecker(multiprocessing.Process):
     def __init__(self, is_roblox: Event, alive: Event):
         super().__init__(name='pfhyperburstmacro-roblox-window-checker', daemon=True)
@@ -201,32 +197,44 @@ class ClickerThread(multiprocessing.Process):
 class StateControllerThread(threading.Thread):
     event: MouseButtonEvent
 
-    def __init__(self):
+    def __init__(
+        self,
+        macro_q: multiprocessing.Queue,
+        mouse_event_q: queue.Queue,
+        is_focused: Event,
+        clicking_event: Event,
+        program_alive_event: Event,
+    ):
         super().__init__(name='pfhyperburstmacro-state-controller-thread', daemon=True)
 
-        self.queue: queue.Queue = mouse_event_queue
+        self.mouse_event_queue: queue.Queue = mouse_event_q
+        self.is_rblx_focused = is_focused
+        self.program_alive = program_alive_event
+        self.macro_queue = macro_q
+        self.do_clicking = clicking_event
+
         self.toggle: bool = True
         self.last_macro: int = 0
 
         self.button_to_event: dict[str, callable] = {
             'left': self.set_clicking,
-            TOGGLE_AUTOCLIKER: self.toggle_autocliker
+            TOGGLE_AUTOCLIKER: self.toggle_autocliker,
         }
 
         self.start()
 
     def set_clicking(self) -> None:
         if self.event.pressed:
-            do_clicking.set()
+            self.do_clicking.set()
             print('Clicking: True')
         else:
             # if event.release:
-            do_clicking.clear()
+            self.do_clicking.clear()
             print('Clicking: False')
 
     def toggle_autocliker(self) -> None:
         if self.event.pressed:
-            macro_queue.put_nowait(('toggle_macro', 2))
+            self.macro_queue.put_nowait(('toggle_macro', 2))
 
     def should_event_pass(self) -> bool:
         """Returns True if the event should pass, else False"""
@@ -243,8 +251,8 @@ class StateControllerThread(threading.Thread):
             return True
 
         # Ignore events if roblox is not focused
-        elif not is_rblx_focused.is_set():
-            do_clicking.clear()
+        elif not self.is_rblx_focused.is_set():
+            self.do_clicking.clear()
             print('Roblox not focused. Skipping.')
             return False
 
@@ -257,8 +265,8 @@ class StateControllerThread(threading.Thread):
         return True
 
     def state_controller(self):
-        while program_alive.is_set():
-            self.event: MouseButtonEvent = self.queue.get()
+        while self.program_alive.is_set():
+            self.event: MouseButtonEvent = self.mouse_event_queue.get()
             print('Got event:', self.event)
 
             # Skip processing events if toggled
@@ -270,7 +278,7 @@ class StateControllerThread(threading.Thread):
             if event is not None:
                 event()
 
-            self.queue.task_done()
+            self.mouse_event_queue.task_done()
 
     def run(self) -> None:
         self.state_controller()
@@ -278,18 +286,18 @@ class StateControllerThread(threading.Thread):
 
 # noinspection PyUnusedLocal
 class MouseListenerThread(mouse.Listener):
-    def __init__(self):
+    def __init__(self, mouse_event_q: queue.Queue):
         super().__init__(
             name='pfhyperburstmacro-mouse-listener-thread',
             win32_event_filter=self.win32_event_filter,
             on_click=self.on_click,
             daemon=True
         )
+        self.mouse_event_queue: queue.Queue = mouse_event_q
         self.start()
 
-    @staticmethod
-    def on_click(*args: *RawMouseButtonEvent) -> None:
-        mouse_event_queue.put_nowait(MouseButtonEvent(*args[2:4]))
+    def on_click(self, *args: *RawMouseButtonEvent) -> None:
+        self.mouse_event_queue.put_nowait(MouseButtonEvent(*args[2:4]))
 
     @staticmethod
     def win32_event_filter(msg, data):
@@ -401,8 +409,9 @@ def get_initial_weapon() -> tuple[float, int, float]:
             print('\nInvalid input. Try again.')
 
 
+# noinspection PyUnusedLocal
 def main() -> None:
-    global active_macro, mouse_event_queue, do_clicking, program_alive, is_rblx_focused, macro_queue
+    global mouse_event_queue, do_clicking, program_alive, is_rblx_focused, macro_queue
 
     with multiprocessing.Manager() as manager:
         manager: SyncManager
@@ -418,19 +427,25 @@ def main() -> None:
 
         # Macros
         macro_args = WEAPON_ARGS or get_initial_weapon()
-
-        autocliker_macro = AutoclickerMacro()
-        primary_macro = PrimaryHyperburstMacro(macro_args)
-        primary_firecaped_macro = PrimaryFirecapedHyperburstMacro(macro_args)
-        macro_databank.update({0: primary_macro, 1: primary_firecaped_macro, 2: autocliker_macro})
+        macro_databank: dict[int, BaseHyperburstMacro] = {
+            0: PrimaryHyperburstMacro(macro_args),
+            1: PrimaryFirecapedHyperburstMacro(macro_args),
+            2: AutoclickerMacro()
+        }
 
         # Start event processing threads
-        mouse_listener_thread = MouseListenerThread()  # noqa
-        state_controller_thread = StateControllerThread()  # noqa
+        mouse_listener_thread = MouseListenerThread(mouse_event_q=mouse_event_queue)
+        state_controller_thread = StateControllerThread(
+            mouse_event_q=mouse_event_queue,
+            is_focused=is_rblx_focused,
+            program_alive_event=program_alive,
+            macro_q=macro_queue,
+            clicking_event=do_clicking
+        )
 
         clicker_thread = ClickerThread(do_clicking, macro_queue, macro_databank, program_alive)
         clicker_thread.start()
-        proc_command('set', macro_args)  # Cursed workaround
+        proc_command(cmd='set', args=macro_args)  # Cursed workaround
 
         window_checker_thread = RobloxWindowFocusedChecker(is_rblx_focused, program_alive)
         window_checker_thread.start()
