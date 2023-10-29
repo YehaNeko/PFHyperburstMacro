@@ -152,10 +152,12 @@ class ClickerThread(multiprocessing.Process):
     def toggle_macro(self, idx: int) -> None:
         if self.is_autoclicker():
             self.set_macro(self.last_non_toggled_macro_id)
+            print('Autoclicker mode toggled to False')
             return
 
         self.last_non_toggled_macro_id = self.active_macro_id
         self.set_macro(idx)
+        print('Autoclicker mode toggled to True')
 
     def macro_queue_worker(self, queue: multiprocessing.Queue, alive: Event):
         while alive.is_set():
@@ -239,6 +241,7 @@ class StateControllerThread(threading.Thread):
     def should_event_pass(self) -> bool:
         """Returns True if the event should pass, else False"""
 
+        # TODO: not supposed to be here
         # This only occurs when the user presses the script toggle key
         if self.event.button.name == TOGGLE_KEYBIND and self.event.pressed:
             # Flip boolean
